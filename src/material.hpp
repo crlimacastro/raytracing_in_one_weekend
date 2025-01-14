@@ -1,6 +1,7 @@
 #pragma once
 
 #include "raytraceable.hpp"
+#include "texture.hpp"
 
 struct material
 {
@@ -9,6 +10,10 @@ struct material
     virtual bool scatter(const ray &r_in, const hit_result &res, color &attenuation, ray &scattered) const
     {
         return false;
+    }
+
+    virtual color emitted(float u, float v, const vec3& p) const {
+        return color{0,0,0};
     }
 };
 
@@ -23,10 +28,24 @@ struct normals : material
 
 struct lambertian : material
 {
-    color albedo = color{1, 1, 1};
+    std::shared_ptr<texture> albedo;
 
     lambertian() = default;
-    lambertian(color a) : albedo{a} {}
+    
+    static auto from_color(color a) -> lambertian
+    {
+        lambertian l;
+        l.albedo = std::make_shared<solid_color>(solid_color::from_color(a));
+        return l;
+    }
+    
+    static auto from_texture(std::shared_ptr<texture> a) -> lambertian
+    {
+        lambertian l;
+        l.albedo = a;
+        return l;
+    }
+
 
     auto scatter(const ray &r_in, const hit_result &res, color &attenuation, ray &scattered) const -> bool override
     {
@@ -36,8 +55,8 @@ struct lambertian : material
             scatter_dir = res.normal;
         }
 
-        scattered = ray{res.p, scatter_dir};
-        attenuation = albedo;
+        scattered = ray{res.p, scatter_dir, r_in.time};
+        attenuation = albedo->value(res.u, res.v, res.p);
         return true;
     }
 };
@@ -53,7 +72,7 @@ struct metal : material
     auto scatter(const ray &r_in, const hit_result &res, color &attenuation, ray &scattered) const -> bool override
     {
         const auto reflected = r_in.direction.reflect(res.normal).normalized() + (fuzz * vec3::random_unit_vector());
-        scattered = ray{res.p, reflected};
+        scattered = ray{res.p, reflected, r_in.time};
         attenuation = albedo;
         return scattered.direction.dot(res.normal) > 0.f;
     }
@@ -86,7 +105,7 @@ struct dielectric : material
         {
             dir = dir_norm.refract(res.normal, ri);
         }
-        scattered = ray{res.p, dir};
+        scattered = ray{res.p, dir, r_in.time};
         return true;
     }
 
@@ -97,5 +116,17 @@ private:
         auto r0 = (1 - refraction_index) / (1 + refraction_index);
         r0 = r0 * r0;
         return r0 + (1 - r0) * std::powf(1 - cos, 5);
+    }
+};
+
+struct diffuse_light : material
+{
+    std::shared_ptr<texture> emit;
+
+    diffuse_light(std::shared_ptr<texture> emit) : emit(emit) {}
+    diffuse_light(const color& emit) : emit(std::make_shared<solid_color>(solid_color::from_color(emit))) {}
+
+    auto emitted(float u, float v, const vec3& p) const -> color override {
+        return emit->value(u, v, p);
     }
 };

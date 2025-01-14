@@ -17,6 +17,11 @@ inline auto randf() -> float
 }
 inline auto randf(float min, float max) -> float { return min + (max - min) * randf(); }
 
+inline auto randi(int min, int max) -> int
+{
+    return int(randf(min, max + 1));
+}
+
 template <typename type>
 constexpr auto lerp(type a, type b, float t) -> type { return a + t * (b - a); }
 
@@ -25,11 +30,28 @@ constexpr auto operator*(const float s, const vec3 &v) -> vec3;
 
 struct vec3
 {
-    float x{};
-    float y{};
-    float z{};
+    union
+    {
+        struct
+        {
+            float x;
+            float y;
+            float z;
+        };
+        struct
+        {
+            float r;
+            float g;
+            float b;
+        };
+        float data[3];
+    };
 
-    constexpr auto operator-() const -> vec3 { return {-x, -y, -z}; }
+    constexpr auto
+    operator-() const -> vec3
+    {
+        return {-x, -y, -z};
+    }
     constexpr auto operator+(const vec3 &v) const -> vec3 { return {x + v.x, y + v.y, z + v.z}; }
     constexpr auto operator+=(const vec3 &v) -> vec3 & { return *this = *this + v; }
     constexpr auto operator-(const vec3 &v) const -> vec3 { return {x - v.x, y - v.y, z - v.z}; }
@@ -119,6 +141,7 @@ struct ray
 {
     vec3 origin{};
     vec3 direction{};
+    float time{};
 
     vec3 at(float t) const { return origin + direction * t; }
 };
@@ -143,11 +166,137 @@ struct interval
     float min = -infinity;
     float max = infinity;
 
+    static constexpr auto from_intervals(const interval &a, const interval &b) -> interval
+    {
+        return {std::min(a.min, b.min), std::max(a.max, b.max)};
+    }
+
     constexpr auto size() const -> float { return max - min; }
     constexpr auto contains(float n) const -> bool { return min <= n && n <= max; }
     constexpr auto surrounds(float n) const -> bool { return min < n && n < max; }
     constexpr auto clamp(float n) const -> float { return std::max(min, std::min(max, n)); }
+    constexpr auto expand(float delta) const -> interval
+    {
+        auto padding = delta / 2.f;
+        return {min - padding, max + padding};
+    }
+
+    constexpr auto operator+(float displacement) const -> interval
+    {
+        return interval{min + displacement, max + displacement};
+    }
 
     static const interval empty;
     static const interval universe;
 };
+
+constexpr auto operator+(float displacement, const interval &ival) -> interval
+{
+    return ival + displacement;
+}
+
+struct aabb
+{
+    interval x, y, z;
+
+    aabb() = default;
+
+    aabb(interval x, interval y, interval z)
+        : x(x), y(y), z(z)
+    {
+        pad_to_minimums();
+    }
+
+    static auto from_points(const vec3 &a, const vec3 &b) -> aabb
+    {
+        return aabb(
+            (a.x <= b.x) ? interval{a.x, b.x} : interval{b.x, a.x},
+            (a.y <= b.y) ? interval{a.y, b.y} : interval{b.y, a.y},
+            (a.z <= b.z) ? interval{a.z, b.z} : interval{b.z, a.z});
+    }
+
+    static auto from_aabbs(const aabb &a, const aabb &b) -> aabb
+    {
+        return aabb(
+            interval::from_intervals(a.x, b.x),
+            interval::from_intervals(a.y, b.y),
+            interval::from_intervals(a.z, b.z));
+    }
+
+    constexpr auto axis_interval(int n) const -> interval
+    {
+        if (n == 1)
+            return y;
+        if (n == 2)
+            return z;
+        return x;
+    }
+
+    constexpr auto hit(const ray &r, interval ray_t) const -> bool
+    {
+        const vec3 &ray_orig = r.origin;
+        const vec3 &ray_dir = r.direction;
+
+        for (int axis = 0; axis < 3; axis++)
+        {
+            const interval &ax = axis_interval(axis);
+            const float adinv = 1.0 / ray_dir.data[axis];
+
+            auto t0 = (ax.min - ray_orig.data[axis]) * adinv;
+            auto t1 = (ax.max - ray_orig.data[axis]) * adinv;
+
+            if (t0 < t1)
+            {
+                if (t0 > ray_t.min)
+                    ray_t.min = t0;
+                if (t1 < ray_t.max)
+                    ray_t.max = t1;
+            }
+            else
+            {
+                if (t1 > ray_t.min)
+                    ray_t.min = t1;
+                if (t0 < ray_t.max)
+                    ray_t.max = t0;
+            }
+
+            if (ray_t.max <= ray_t.min)
+                return false;
+        }
+        return true;
+    }
+
+    constexpr auto longest_axis() const -> int
+    {
+        if (x.size() > y.size())
+        {
+            return x.size() > z.size() ? 0 : 2;
+        }
+
+        return y.size() > z.size() ? 1 : 2;
+    }
+
+    constexpr auto operator+(const vec3 &offset) const -> aabb
+    {
+        return aabb(x + offset.x, y + offset.y, z + offset.z);
+    }
+
+    static const aabb empty, universe;
+
+private:
+    void pad_to_minimums()
+    {
+        float delta = 0.0001;
+        if (x.size() < delta)
+            x = x.expand(delta);
+        if (y.size() < delta)
+            y = y.expand(delta);
+        if (z.size() < delta)
+            z = z.expand(delta);
+    }
+};
+
+constexpr auto operator+(const vec3 &offset, const aabb &bbox) -> aabb
+{
+    return bbox + offset;
+}

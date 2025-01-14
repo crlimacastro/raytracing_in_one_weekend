@@ -4,11 +4,28 @@
 #include <filesystem>
 #include <print>
 #include <chrono>
+#include <string>
 
 #include "common.hpp"
 #include "raytraceable.hpp"
 #include "material.hpp"
 #include "image.hpp"
+
+auto seconds_to_time_display_units(float seconds, float &units, std::string &unit_name) -> void
+{
+    units = seconds;
+    unit_name = "seconds";
+    if (units > 60.f)
+    {
+        units /= 60.f;
+        unit_name = "minutes";
+    }
+    if (units > 60.f)
+    {
+        units /= 60.f;
+        unit_name = "hours";
+    }
+}
 
 struct camera
 {
@@ -17,6 +34,7 @@ struct camera
     bool initialized = false;
     std::size_t samples_per_pixel = 10;
     std::size_t max_depth = 10;
+    color background;
     angle vfov = angle::from_degrees(90);
     vec3 look_from = vec3{0.f, 0.f, 0.f};
     vec3 look_at = vec3{0.f, 0.f, -1.f};
@@ -25,7 +43,7 @@ struct camera
     angle defocus_angle = angle::from_radians(0.f);
     float focus_dist = 10.f;
 
-    auto render(world_view world, std::filesystem::path path) -> void
+    auto render(const world &world, std::filesystem::path path) -> void
     {
         if (!initialized)
             init();
@@ -34,6 +52,7 @@ struct camera
         std::println("rendering {}x{} image at {} samples per pixel to {}", image_width, image_height, samples_per_pixel, path.string());
         auto start = std::chrono::high_resolution_clock::now();
         const auto pixel_sample_scale = 1.0f / samples_per_pixel;
+        std::string time_unit = "seconds";
         for (std::size_t i = 0; i < image_height; ++i)
         {
             for (std::size_t j = 0; j < image_width; ++j)
@@ -50,21 +69,14 @@ struct camera
             auto elapsed = std::chrono::high_resolution_clock::now() - start;
             auto elapsed_s = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
             auto estimated_time_left = elapsed_s * (100.f - percent) / percent;
-            auto time_unit = "seconds";
-            if (estimated_time_left > 60.f)
-            {
-                estimated_time_left /= 60.f;
-                time_unit = "minutes";
-            }
-            if (estimated_time_left > 60.f)
-            {
-                estimated_time_left /= 60.f;
-                time_unit = "hours";
-            }
+            seconds_to_time_display_units(estimated_time_left, estimated_time_left, time_unit);
             std::println("{}% in {}s, estimated {}{} left", percent, elapsed_s, estimated_time_left, time_unit);
         }
         img.write(path);
-        std::println("finished in {}s, output at {}", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now() - start).count(), path.string());
+        auto elapsed = std::chrono::high_resolution_clock::now() - start;
+        float elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+        seconds_to_time_display_units(elapsed_time, elapsed_time, time_unit);
+        std::println("finished in {}{}, output at {}", elapsed, time_unit, path.string());
     }
 
 private:
@@ -106,25 +118,32 @@ private:
         defocus_disk_v = v * defocus_radius;
     }
 
-    auto ray_color(const ray &r, std::size_t depth, world_view world) const -> color
+    auto ray_color(const ray &r, std::size_t depth, const world &world) const -> color
     {
         if (depth <= 0)
         {
             return color{0, 0, 0};
         }
         hit_result res;
-        if (hit_anything(world, r, interval{0.001f, infinity}, res))
+        if (!world.hit(r, interval{0.001f, infinity}, res))
         {
-            ray scattered{};
-            color attenuation{};
-            if (res.mat->scatter(r, res, attenuation, scattered))
-            {
-                return attenuation * ray_color(scattered, depth - 1, world);
-            }
-            return color{0, 0, 0};
+            return background;
+            // const float t = 0.5 * (r.direction.y + 1.0f);
+            // return lerp(color{1.0f, 1.0f, 1.0f}, color{0.5f, 0.7f, 1.0f}, t);
         }
-        const float t = 0.5 * (r.direction.y + 1.0f);
-        return lerp(color{1.0f, 1.0f, 1.0f}, color{0.5f, 0.7f, 1.0f}, t);
+
+        ray scattered;
+        color attenuation;
+        auto color_from_emission = res.mat->emitted(res.u, res.v, res.p);
+
+        if (!res.mat->scatter(r, res, attenuation, scattered))
+        {
+            return color_from_emission;
+        }
+
+        auto color_from_scatter = attenuation * ray_color(scattered, depth - 1, world);
+
+        return color_from_emission + color_from_scatter;
     }
 
     auto get_ray(std::size_t j, std::size_t i) const -> ray
@@ -134,8 +153,9 @@ private:
 
         auto ray_origin = (defocus_angle.radians <= 0.f) ? center : sample_defocus_disk();
         auto ray_direction = pixel_sample - ray_origin;
+        auto ray_time = randf();
 
-        return ray{ray_origin, ray_direction};
+        return ray{ray_origin, ray_direction, ray_time};
     }
 
     auto sample_square() const -> vec3
