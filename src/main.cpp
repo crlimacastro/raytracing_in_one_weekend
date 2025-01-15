@@ -143,7 +143,7 @@ auto scene_cornell_box(world &world, camera &cam) -> void
 
     cam.aspect_ratio = 1.0;
     cam.image_width = 400;
-    cam.samples_per_pixel = 100;
+    cam.samples_per_pixel = 1000;
     cam.max_depth = 50;
     cam.background = color{0, 0, 0};
     cam.vfov = angle::from_degrees(40);
@@ -153,12 +153,51 @@ auto scene_cornell_box(world &world, camera &cam) -> void
     cam.defocus_angle = angle::from_radians(0);
 }
 
+auto scene_cornell_with_smoke(world &world, camera &cam) -> void
+{
+    auto red = std::make_shared<lambertian>(lambertian::from_color(color{.65, .05, .05}));
+    auto white = std::make_shared<lambertian>(lambertian::from_color(color{.73, .73, .73}));
+    auto green = std::make_shared<lambertian>(lambertian::from_color(color{.12, .45, .15}));
+    auto light = std::make_shared<diffuse_light>(color{7, 7, 7});
+
+    world.add(std::make_shared<quad>(vec3{555, 0, 0}, vec3{0, 555, 0}, vec3{0, 0, 555}, green));
+    world.add(std::make_shared<quad>(vec3{0, 0, 0}, vec3{0, 555, 0}, vec3{0, 0, 555}, red));
+    world.add(std::make_shared<quad>(vec3{113, 554, 127}, vec3{330, 0, 0}, vec3{0, 0, 305}, light));
+    world.add(std::make_shared<quad>(vec3{0, 555, 0}, vec3{555, 0, 0}, vec3{0, 0, 555}, white));
+    world.add(std::make_shared<quad>(vec3{0, 0, 0}, vec3{555, 0, 0}, vec3{0, 0, 555}, white));
+    world.add(std::make_shared<quad>(vec3{0, 0, 555}, vec3{555, 0, 0}, vec3{0, 555, 0}, white));
+
+    std::shared_ptr<raytraceable> box1 = box(vec3{0, 0, 0}, vec3{165, 330, 165}, white);
+    box1 = std::make_shared<rotate_y>(box1, angle::from_degrees(15));
+    box1 = std::make_shared<translate>(box1, vec3{265, 0, 295});
+
+    std::shared_ptr<raytraceable> box2 = box(vec3{0, 0, 0}, vec3{165, 165, 165}, white);
+    box2 = std::make_shared<rotate_y>(box2, angle::from_degrees(-18));
+    box2 = std::make_shared<translate>(box2, vec3{130, 0, 65});
+
+    world.add(std::make_shared<constant_medium>(box1, 0.01, color{0, 0, 0}));
+    world.add(std::make_shared<constant_medium>(box2, 0.01, color{1, 1, 1}));
+
+    cam.aspect_ratio = 1.0;
+    cam.image_width = 600;
+    cam.samples_per_pixel = 200;
+    cam.max_depth = 50;
+    cam.background = color{0, 0, 0};
+
+    cam.vfov = angle::from_degrees(40);
+    cam.look_from = vec3{278, 278, -800};
+    cam.look_at = vec3{278, 278, 0};
+    cam.up = vec3{0, 1, 0};
+
+    cam.defocus_angle = angle::from_radians(0);
+}
+
 auto main(int argc, char *argv[]) -> int
 {
     auto args = args::from(argc, argv);
     world world{};
     camera cam{};
-    scene_cornell_box(world, cam);
+    scene_earth(world, cam);
     world.optimize();
     cam.render(world, args.output_path);
 }

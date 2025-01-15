@@ -6,25 +6,12 @@
 #include <algorithm>
 
 #include "common.hpp"
+#include "hit_result.hpp"
+#include "material.hpp"
 
 struct material;
 
-struct hit_result
-{
-    vec3 p{};
-    vec3 normal{};
-    std::shared_ptr<material> mat;
-    float t{};
-    float u{};
-    float v{};
-    bool front_face{};
 
-    void set_face_normal(const ray &r, const vec3 &outward_normal)
-    {
-        front_face = r.direction.dot(outward_normal) < 0.f;
-        normal = front_face ? outward_normal : -outward_normal;
-    }
-};
 
 struct raytraceable
 {
@@ -436,3 +423,57 @@ inline std::shared_ptr<world> box(const vec3 &a, const vec3 &b, std::shared_ptr<
 
     return sides;
 }
+
+struct constant_medium : raytraceable {
+    constant_medium(std::shared_ptr<raytraceable> boundary, float density, std::shared_ptr<texture> tex)
+      : boundary(boundary), neg_inv_density(-1/density),
+        phase_function(std::make_shared<isotropic>(tex))
+    {}
+
+    constant_medium(std::shared_ptr<raytraceable> boundary, float density, const color& albedo)
+      : boundary(boundary), neg_inv_density(-1/density),
+        phase_function(std::make_shared<isotropic>(albedo))
+    {}
+
+    auto hit(const ray& r, const interval& ray_t, hit_result& rec) const -> bool override {
+        hit_result rec1, rec2;
+
+        if (!boundary->hit(r, interval::universe, rec1))
+            return false;
+
+        if (!boundary->hit(r, interval(rec1.t+0.0001, infinity), rec2))
+            return false;
+
+        if (rec1.t < ray_t.min) rec1.t = ray_t.min;
+        if (rec2.t > ray_t.max) rec2.t = ray_t.max;
+
+        if (rec1.t >= rec2.t)
+            return false;
+
+        if (rec1.t < 0)
+            rec1.t = 0;
+
+        auto ray_length = r.direction.magnitude();
+        auto distance_inside_boundary = (rec2.t - rec1.t) * ray_length;
+        auto hit_distance = neg_inv_density * std::logf(randf());
+
+        if (hit_distance > distance_inside_boundary)
+            return false;
+
+        rec.t = rec1.t + hit_distance / ray_length;
+        rec.p = r.at(rec.t);
+
+        rec.normal = vec3{1,0,0};  // arbitrary
+        rec.front_face = true;     // also arbitrary
+        rec.mat = phase_function;
+
+        return true;
+    }
+
+    auto bbox() const -> aabb override { return boundary->bbox(); }
+
+  private:
+    std::shared_ptr<raytraceable> boundary;
+    float neg_inv_density;
+    std::shared_ptr<material> phase_function;
+};

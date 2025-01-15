@@ -1,7 +1,5 @@
 #pragma once
 
-#define STB_IMAGE_IMPLEMENTATION
-#define STBI_FAILURE_USERMSG
 #include "stb_image.h"
 
 #include <cstdlib>
@@ -27,10 +25,7 @@ class rtw_image {
         std::cerr << "ERROR: Could not load image file '" << image_filename << "'.\n";
     }
 
-    ~rtw_image() {
-        delete[] bdata;
-        STBI_FREE(fdata);
-    }
+    ~rtw_image();
 
     bool load(const std::string& filename) {
         // Loads the linear (gamma=1) image data from the given file name. Returns true if the

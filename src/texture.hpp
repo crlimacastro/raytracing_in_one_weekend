@@ -2,7 +2,7 @@
 
 #include <string_view>
 #include "common.hpp"
-#include "rtw_stb.image.hpp"
+#include "rtw_stb_image.hpp"
 #include "perlin.hpp"
 
 struct texture

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "raytraceable.hpp"
 #include "texture.hpp"
+#include "hit_result.hpp"
 
 struct material
 {
@@ -12,8 +12,9 @@ struct material
         return false;
     }
 
-    virtual color emitted(float u, float v, const vec3& p) const {
-        return color{0,0,0};
+    virtual color emitted(float u, float v, const vec3 &p) const
+    {
+        return color{0, 0, 0};
     }
 };
 
@@ -31,21 +32,20 @@ struct lambertian : material
     std::shared_ptr<texture> albedo;
 
     lambertian() = default;
-    
+
     static auto from_color(color a) -> lambertian
     {
         lambertian l;
         l.albedo = std::make_shared<solid_color>(solid_color::from_color(a));
         return l;
     }
-    
+
     static auto from_texture(std::shared_ptr<texture> a) -> lambertian
     {
         lambertian l;
         l.albedo = a;
         return l;
     }
-
 
     auto scatter(const ray &r_in, const hit_result &res, color &attenuation, ray &scattered) const -> bool override
     {
@@ -124,9 +124,26 @@ struct diffuse_light : material
     std::shared_ptr<texture> emit;
 
     diffuse_light(std::shared_ptr<texture> emit) : emit(emit) {}
-    diffuse_light(const color& emit) : emit(std::make_shared<solid_color>(solid_color::from_color(emit))) {}
+    diffuse_light(const color &emit) : emit(std::make_shared<solid_color>(solid_color::from_color(emit))) {}
 
-    auto emitted(float u, float v, const vec3& p) const -> color override {
+    auto emitted(float u, float v, const vec3 &p) const -> color override
+    {
         return emit->value(u, v, p);
+    }
+};
+
+struct isotropic : material
+{
+    std::shared_ptr<texture> tex;
+
+    isotropic() = default;
+    isotropic(const color &albedo) : tex(std::make_shared<solid_color>(solid_color::from_color(albedo))) {}
+    isotropic(std::shared_ptr<texture> tex) : tex(tex) {}
+
+    auto scatter(const ray &r_in, const hit_result &res, color &attenuation, ray &scattered) const -> bool override
+    {
+        scattered = ray(res.p, vec3::random_unit_vector(), r_in.time);
+        attenuation = tex->value(res.u, res.v, res.p);
+        return true;
     }
 };
