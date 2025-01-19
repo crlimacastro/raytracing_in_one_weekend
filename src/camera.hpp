@@ -43,7 +43,7 @@ struct camera
     angle defocus_angle = angle::from_radians(0.f);
     float focus_dist = 10.f;
 
-    auto render(const world &world, std::filesystem::path path) -> void
+    auto render(const world &w, const world &lights, std::filesystem::path path) -> void
     {
         if (!initialized)
             init();
@@ -51,17 +51,19 @@ struct camera
         auto img = image{image_width, image_height};
         std::println("rendering {}x{} image at {} samples per pixel to {}", image_width, image_height, samples_per_pixel, path.string());
         auto start = std::chrono::high_resolution_clock::now();
-        const auto pixel_sample_scale = 1.0f / samples_per_pixel;
         std::string time_unit = "seconds";
         for (std::size_t i = 0; i < image_height; ++i)
         {
             for (std::size_t j = 0; j < image_width; ++j)
             {
                 auto pixel_color = color{0, 0, 0};
-                for (std::size_t s = 0; s < samples_per_pixel; ++s)
+                for (std::size_t s_i = 0; s_i < sqrt_spp; ++s_i)
                 {
-                    const auto r = get_ray(i, j);
-                    pixel_color += ray_color(r, max_depth, world);
+                    for (std::size_t s_j = 0; s_j < sqrt_spp; ++s_j)
+                    {
+                        ray r = get_ray(j, i, s_j, s_i);
+                        pixel_color += ray_color(r, max_depth, w, lights);
+                    }
                 }
                 img.set_color(j, i, pixel_sample_scale * pixel_color);
             }
@@ -76,11 +78,14 @@ struct camera
         auto elapsed = std::chrono::high_resolution_clock::now() - start;
         float elapsed_time = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
         seconds_to_time_display_units(elapsed_time, elapsed_time, time_unit);
-        std::println("finished in {}{}, output at {}", elapsed, time_unit, path.string());
+        std::println("finished in {}{}, output at {}", elapsed_time, time_unit, path.string());
     }
 
 private:
     std::size_t image_height{};
+    float pixel_sample_scale{};
+    int sqrt_spp{};
+    float recip_sqrt_spp{};
     vec3 center{};
     vec3 pixel00_loc{};
     vec3 pixel_delta_u{};
@@ -92,6 +97,10 @@ private:
     auto init() -> void
     {
         image_height = std::max(static_cast<int>(image_width / aspect_ratio), 1);
+
+        sqrt_spp = static_cast<int>(std::sqrtf(samples_per_pixel));
+        pixel_sample_scale = 1.f / (sqrt_spp * sqrt_spp);
+        recip_sqrt_spp = 1.f / sqrt_spp;
 
         center = look_from;
 
@@ -118,38 +127,51 @@ private:
         defocus_disk_v = v * defocus_radius;
     }
 
-    auto ray_color(const ray &r, std::size_t depth, const world &world) const -> color
+    auto ray_color(const ray &r, std::size_t depth, const world &w, const world &lights) const -> color
     {
         if (depth <= 0)
         {
             return color{0, 0, 0};
         }
         hit_result res;
-        if (!world.hit(r, interval{0.001f, infinity}, res))
+        if (!w.hit(r, interval{0.001f, infinity}, res))
         {
             return background;
             // const float t = 0.5 * (r.direction.y + 1.0f);
             // return lerp(color{1.0f, 1.0f, 1.0f}, color{0.5f, 0.7f, 1.0f}, t);
         }
 
-        ray scattered;
-        color attenuation;
-        auto color_from_emission = res.mat->emitted(res.u, res.v, res.p);
+        scatter_result sres;
+        const auto color_from_emission = res.mat->emitted(r, res, res.u, res.v, res.p);
 
-        if (!res.mat->scatter(r, res, attenuation, scattered))
+        if (!res.mat->scatter(r, res, sres))
         {
             return color_from_emission;
         }
 
-        auto color_from_scatter = attenuation * ray_color(scattered, depth - 1, world);
+        if (sres.skip_pdf)
+        {
+            return sres.attenuation * ray_color(sres.skip_pdf_ray, depth - 1, w, lights);
+        }
+
+        const auto light_ptr = std::make_shared<raytraceable_pdf>(lights, res.p);
+        const auto p = mixture_pdf{light_ptr, sres.pdf_ptr};
+
+        const auto scattered = ray{res.p, p.generate(), r.time};
+        const auto pdf_value = p.value(scattered.direction);
+
+        const auto scatter_pdf = res.mat->scatter_pdf(r, res, scattered);
+
+        const auto sample_color = ray_color(scattered, depth - 1, w, lights);
+        const auto color_from_scatter = (sres.attenuation * scatter_pdf * sample_color) / pdf_value;
 
         return color_from_emission + color_from_scatter;
     }
 
-    auto get_ray(std::size_t j, std::size_t i) const -> ray
+    auto get_ray(std::size_t j, std::size_t i, std::size_t s_j, std::size_t s_i) const -> ray
     {
-        auto offset = sample_square();
-        auto pixel_sample = pixel00_loc + ((i + offset.x) * pixel_delta_u) + ((j + offset.y) * pixel_delta_v);
+        auto offset = sample_square_stratified(s_j, s_i);
+        auto pixel_sample = pixel00_loc + ((j + offset.x) * pixel_delta_u) + ((i + offset.y) * pixel_delta_v);
 
         auto ray_origin = (defocus_angle.radians <= 0.f) ? center : sample_defocus_disk();
         auto ray_direction = pixel_sample - ray_origin;
@@ -161,6 +183,14 @@ private:
     auto sample_square() const -> vec3
     {
         return vec3{randf() - 0.5f, randf() - 0.5f, 0};
+    }
+
+    auto sample_square_stratified(int s_j, int s_i) const -> vec3
+    {
+        const auto px = ((s_j + randf()) * recip_sqrt_spp) - 0.5f;
+        const auto py = ((s_i + randf()) * recip_sqrt_spp) - 0.5f;
+
+        return vec3{px, py, 0.f};
     }
 
     auto sample_defocus_disk() const -> vec3

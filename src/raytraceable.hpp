@@ -11,13 +11,13 @@
 
 struct material;
 
-
-
 struct raytraceable
 {
     virtual ~raytraceable() = default;
     virtual auto hit(const ray &r, const interval &t, hit_result &res) const -> bool = 0;
     virtual auto bbox() const -> aabb = 0;
+    virtual auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float { return 0.f; }
+    virtual auto random(const vec3 &origin) const -> vec3 { return vec3{1.f, 0.f, 0.f}; }
 };
 
 struct translate : raytraceable
@@ -48,6 +48,13 @@ struct translate : raytraceable
     }
 
     auto bbox() const -> aabb override { return m_bbox; }
+
+    auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        return object->pdf_value(origin - offset, direction);
+    }
+
+    auto random(const vec3 &origin) const -> vec3 override { return object->random(origin - offset); }
 };
 
 struct rotate_y : raytraceable
@@ -131,6 +138,13 @@ struct rotate_y : raytraceable
     }
 
     aabb bbox() const override { return m_bbox; }
+
+    auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        return object->pdf_value(origin, direction);
+    }
+
+    auto random(const vec3 &origin) const -> vec3 override { return object->random(origin); }
 };
 
 struct world : raytraceable
@@ -165,6 +179,20 @@ struct world : raytraceable
     auto bbox() const -> aabb override { return m_bbox; }
 
     auto optimize() -> void;
+
+    auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        const auto weight = 1.f / objs.size();
+        auto sum = 0.f;
+        for (const auto &obj : objs)
+            sum += weight * obj->pdf_value(origin, direction);
+        return sum;
+    }
+
+    auto random(const vec3 &origin) const -> vec3 override
+    {
+        return objs[randi(0, objs.size() - 1)]->random(origin);
+    }
 
 private:
     aabb m_bbox;
@@ -233,6 +261,29 @@ struct sphere : raytraceable
         return m_bbox;
     }
 
+    auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        hit_result res{};
+        if (!this->hit(ray(origin, direction), interval{0.001f, infinity}, res))
+        {
+            return 0.f;
+        }
+
+        const auto dist_squared = (center.at(0) - origin).magnitude_squared();
+        const auto cos_theta_max = std::sqrtf(1.f - radius * radius / dist_squared);
+        const auto solid_angle = 2 * pi * (1 - cos_theta_max);
+
+        return 1.f / solid_angle;
+    }
+
+    auto random(const vec3 &origin) const -> vec3 override
+    {
+        const auto direction = center.at(0) - origin;
+        const auto distance_squared = direction.magnitude_squared();
+        const auto uvw = onb{direction};
+        return uvw.transform(random_to_sphere(radius, distance_squared));
+    }
+
     static auto get_sphere_uv(const vec3 &p, float &u, float &v) -> void
     {
         auto theta = std::acosf(-p.y);
@@ -240,6 +291,20 @@ struct sphere : raytraceable
 
         u = phi / (2 * pi);
         v = theta / pi;
+    }
+
+    static auto random_to_sphere(float radius, float distance_squared) -> vec3
+    {
+        const auto r1 = randf();
+        const auto r2 = randf();
+        const auto z = 1.f + r2 * (std::sqrtf(1.f - radius * radius / distance_squared) - 1.f);
+
+        const auto sqrt_inv_z_squared = std::sqrtf(1.f - z * z);
+        const auto phi = 2 * pi *r1;
+        const auto x = std::cosf(phi) * sqrt_inv_z_squared;
+        const auto y = std::sinf(phi) * sqrt_inv_z_squared;
+
+        return {x, y, z};
     }
 
 private:
@@ -307,6 +372,19 @@ struct bvh_node : raytraceable
 
     auto bbox() const -> aabb override { return m_bbox; }
 
+    auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        return 0.5f * (left->pdf_value(origin, direction) + right->pdf_value(origin, direction));
+    }
+
+    auto random(const vec3 &origin) const -> vec3 override
+    {
+        if (randf() < 0.5f)
+            return left->random(origin);
+        else
+            return right->random(origin);
+    }
+
 private:
     aabb m_bbox{};
 
@@ -343,6 +421,7 @@ struct quad : raytraceable
     aabb m_bbox;
     vec3 normal;
     float d;
+    float area;
 
     quad(const vec3 &q, const vec3 &u, const vec3 &v, std::shared_ptr<material> mat)
         : q(q), u(u), v(v), mat(mat)
@@ -351,6 +430,7 @@ struct quad : raytraceable
         normal = n.normalized();
         d = normal.dot(q);
         w = n / n.dot(n);
+        area = n.magnitude();
         set_bounding_box();
     }
 
@@ -401,6 +481,26 @@ struct quad : raytraceable
         res.v = b;
         return true;
     }
+
+    virtual auto pdf_value(const vec3 &origin, const vec3 &direction) const -> float override
+    {
+        hit_result res{};
+        if (!this->hit(ray{origin, direction}, interval{0.001f, infinity}, res))
+        {
+            return 0.f;
+        }
+
+        const auto distance_squared = res.t * res.t * direction.magnitude_squared();
+        const auto cosine = std::fabsf(direction.dot(res.normal) / direction.magnitude());
+
+        return distance_squared / (cosine * area);
+    }
+
+    virtual auto random(const vec3 &origin) const -> vec3 override
+    {
+        const auto p = q + (randf() * u) + (randf() * v);
+        return p - origin;
+    }
 };
 
 inline std::shared_ptr<world> box(const vec3 &a, const vec3 &b, std::shared_ptr<material> mat)
@@ -424,28 +524,34 @@ inline std::shared_ptr<world> box(const vec3 &a, const vec3 &b, std::shared_ptr<
     return sides;
 }
 
-struct constant_medium : raytraceable {
+struct constant_medium : raytraceable
+{
     constant_medium(std::shared_ptr<raytraceable> boundary, float density, std::shared_ptr<texture> tex)
-      : boundary(boundary), neg_inv_density(-1/density),
-        phase_function(std::make_shared<isotropic>(tex))
-    {}
+        : boundary(boundary), neg_inv_density(-1 / density),
+          phase_function(std::make_shared<isotropic>(tex))
+    {
+    }
 
-    constant_medium(std::shared_ptr<raytraceable> boundary, float density, const color& albedo)
-      : boundary(boundary), neg_inv_density(-1/density),
-        phase_function(std::make_shared<isotropic>(albedo))
-    {}
+    constant_medium(std::shared_ptr<raytraceable> boundary, float density, const color &albedo)
+        : boundary(boundary), neg_inv_density(-1 / density),
+          phase_function(std::make_shared<isotropic>(albedo))
+    {
+    }
 
-    auto hit(const ray& r, const interval& ray_t, hit_result& rec) const -> bool override {
+    auto hit(const ray &r, const interval &ray_t, hit_result &rec) const -> bool override
+    {
         hit_result rec1, rec2;
 
         if (!boundary->hit(r, interval::universe, rec1))
             return false;
 
-        if (!boundary->hit(r, interval(rec1.t+0.0001, infinity), rec2))
+        if (!boundary->hit(r, interval(rec1.t + 0.0001, infinity), rec2))
             return false;
 
-        if (rec1.t < ray_t.min) rec1.t = ray_t.min;
-        if (rec2.t > ray_t.max) rec2.t = ray_t.max;
+        if (rec1.t < ray_t.min)
+            rec1.t = ray_t.min;
+        if (rec2.t > ray_t.max)
+            rec2.t = ray_t.max;
 
         if (rec1.t >= rec2.t)
             return false;
@@ -463,8 +569,8 @@ struct constant_medium : raytraceable {
         rec.t = rec1.t + hit_distance / ray_length;
         rec.p = r.at(rec.t);
 
-        rec.normal = vec3{1,0,0};  // arbitrary
-        rec.front_face = true;     // also arbitrary
+        rec.normal = vec3{1, 0, 0}; // arbitrary
+        rec.front_face = true;      // also arbitrary
         rec.mat = phase_function;
 
         return true;
@@ -472,7 +578,30 @@ struct constant_medium : raytraceable {
 
     auto bbox() const -> aabb override { return boundary->bbox(); }
 
-  private:
+    auto pdf_value(const vec3 &o, const vec3 &v) const -> float override
+    {
+        hit_result rec;
+        if (!boundary->hit(ray(o, v), interval(0, infinity), rec))
+            return 0.f;
+
+        auto cosine = std::fabsf(v.dot(rec.normal) / v.magnitude());
+        auto distance_squared = rec.t * rec.t * v.magnitude_squared();
+        auto pdf = neg_inv_density * cosine / distance_squared;
+        return pdf;
+    }
+
+    auto random(const vec3 &o) const -> vec3 override
+    {
+        vec3 direction;
+        auto r1 = vec3::random_unit_vector();
+        auto r2 = vec3::random_unit_vector();
+        direction.x = r1.x * r1.x - r2.x * r2.x;
+        direction.y = r1.y * r1.y - r2.y * r2.y;
+        direction.z = r1.z * r1.z - r2.z * r2.z;
+        return direction.normalized();
+    }
+
+private:
     std::shared_ptr<raytraceable> boundary;
     float neg_inv_density;
     std::shared_ptr<material> phase_function;

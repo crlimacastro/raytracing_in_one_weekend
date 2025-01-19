@@ -19,9 +19,17 @@ public:
 
     auto set_color(std::size_t x, std::size_t y, const color &c) -> void
     {
-        const auto rgamma = linear_to_gamma(c.x);
-        const auto ggamma = linear_to_gamma(c.y);
-        const auto bgamma = linear_to_gamma(c.z);
+        auto r = c.x;
+        auto g = c.y;
+        auto b = c.z;
+
+        if (is_nan(r)) r = 0.f;
+        if (is_nan(g)) g = 0.f;
+        if (is_nan(b)) b = 0.f;
+
+        const auto rgamma = linear_to_gamma(r);
+        const auto ggamma = linear_to_gamma(g);
+        const auto bgamma = linear_to_gamma(b);
 
         static const auto intensity = interval{0.f, 0.999f};
         const auto rbyte = static_cast<std::uint8_t>(256.f * intensity.clamp(rgamma));

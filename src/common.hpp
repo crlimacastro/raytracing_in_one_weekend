@@ -3,11 +3,14 @@
 #include <cmath>
 #include <random>
 #include <limits>
+#include <array>
 
 constexpr auto infinity = std::numeric_limits<float>::infinity();
 constexpr auto pi = 3.141592f;
 constexpr auto degrees_to_radians = pi / 180.0f;
 constexpr auto radians_to_degrees = 180.0f / pi;
+
+constexpr auto is_nan(float n) { return n != n; }
 
 inline auto randf() -> float
 {
@@ -122,11 +125,108 @@ struct vec3
                 return p;
         }
     }
+
+    static auto random_cosine_direction() -> vec3
+    {
+        const auto r1 = randf();
+        const auto r2 = randf();
+
+        const auto phi = 2 * pi * r1;
+        const auto sqrt_r2 = std::sqrtf(r2);
+        const auto x = std::cosf(phi) * sqrt_r2;
+        const auto y = std::sinf(phi) * sqrt_r2;
+        const auto z = std::sqrtf(1 - r2);
+
+        return {x, y, z};
+    }
 };
 
 using color = vec3;
 
-constexpr auto linear_to_gamma(float linear) -> float
+struct onb
+{
+    std::array<vec3, 3> axis;
+
+    constexpr onb(const vec3 &normal)
+    {
+        axis[2] = normal.normalized();
+        const auto a = (std::fabsf(axis[2].x) > 0.9f) ? vec3{0, 1, 0} : vec3{1, 0, 0};
+        axis[1] = axis[2].cross(a).normalized();
+        axis[0] = axis[1].cross(axis[2]);
+    }
+
+    auto u() const -> const vec3 & { return axis[0]; }
+    auto v() const -> const vec3 & { return axis[1]; }
+    auto w() const -> const vec3 & { return axis[2]; }
+
+    auto transform(const vec3 &v) const -> vec3 { return (v.x * axis[0]) + (v.y * axis[1]) + (v.z * axis[2]); }
+};
+
+struct pdf
+{
+    virtual ~pdf() {}
+    virtual auto value(const vec3 &direction) const -> float = 0;
+    virtual auto generate() const -> vec3 = 0;
+};
+
+struct sphere_pdf : pdf
+{
+    sphere_pdf() {}
+    auto value(const vec3 &direction) const -> float { return 1.f / (4.f * pi); }
+    auto generate() const -> vec3 { return vec3::random_unit_vector(); }
+};
+
+struct cosine_pdf : pdf
+{
+    onb uvw;
+
+    cosine_pdf(const vec3 &w) : uvw{w} {}
+
+    auto value(const vec3 &direction) const -> float override
+    {
+        const auto cosine_theta = direction.normalized().dot(uvw.w());
+        return std::fmaxf(0.f, cosine_theta / pi);
+    }
+
+    auto generate() const -> vec3 override
+    {
+        return uvw.transform(vec3::random_cosine_direction());
+    }
+};
+
+struct raytraceable;
+struct raytraceable_pdf : pdf
+{
+    const raytraceable& obj;
+    vec3 origin;
+
+    raytraceable_pdf(const raytraceable& obj, const vec3& origin) : obj{obj}, origin{origin} {}
+
+    auto value(const vec3& direction) const -> float override;
+    auto generate() const -> vec3 override;
+};
+
+struct mixture_pdf : pdf
+{
+    std::array<std::shared_ptr<pdf>, 2> p;
+
+    mixture_pdf(std::shared_ptr<pdf> p1, std::shared_ptr<pdf> p2) : p{p1, p2} {}
+
+    auto value(const vec3& direction) const -> float override
+    {
+        return 0.5f * p[0]->value(direction) + 0.5f * p[1]->value(direction);
+    }
+
+    auto generate() const -> vec3 override
+    {
+        if (randf() < 0.5f)
+            return p[0]->generate();
+        return p[1]->generate();
+    }
+};
+
+constexpr auto
+linear_to_gamma(float linear) -> float
 {
     if (linear > 0.f)
     {
