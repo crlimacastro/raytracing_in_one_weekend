@@ -244,7 +244,7 @@ private:
                 img.set_color(j, i, pixel_sample_scale * pixel_color);
             }
 
-            report_progress(thread_id, static_cast<float>(start_y_pixel + i) / end_y_pixel);
+            report_progress(thread_id, static_cast<float>(start_y_pixel + i + 1) / end_y_pixel);
         }
     }
 };
