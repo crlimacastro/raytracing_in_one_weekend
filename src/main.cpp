@@ -139,12 +139,12 @@ auto scene_cornell_box(world &w, world &lights, camera &cam) -> void
     w.add(std::make_shared<quad>(vec3{555, 555, 555}, vec3{-555, 0, 0}, vec3{0, 0, -555}, white));
     w.add(std::make_shared<quad>(vec3{0, 0, 555}, vec3{555, 0, 0}, vec3{0, 555, 0}, white));
 
-    std::shared_ptr<raytraceable> box1 = box(vec3{0, 0, 0}, vec3{165, 330, 165}, white);
+    std::shared_ptr<raytraceable> box1 = box(vec3{0, 0, 0}, vec3{165, 330, 165}, aluminum);
     box1 = std::make_shared<rotate_y>(box1, angle::from_degrees(15));
     box1 = std::make_shared<translate>(box1, vec3{265, 0, 295});
     w.add(box1);
 
-    std::shared_ptr<raytraceable> box2 = box(vec3{0, 0, 0}, vec3{165, 165, 165}, aluminum);
+    std::shared_ptr<raytraceable> box2 = box(vec3{0, 0, 0}, vec3{165, 165, 165}, white);
     box2 = std::make_shared<rotate_y>(box2, angle::from_degrees(-18));
     box2 = std::make_shared<translate>(box2, vec3{130, 0, 65});
     w.add(box2);
