@@ -10,12 +10,17 @@ struct args
 {
     std::string_view path;
     std::filesystem::path output_path;
+    std::size_t threads = 1;
 
     static auto from(int argc, char *argv[]) -> args
     {
         args args{};
         args.path = argv[0];
         args.output_path = argv[1];
+        if (argc > 2)
+        {
+            args.threads = std::stoul(argv[2]);
+        }
         return args;
     }
 };
@@ -139,7 +144,7 @@ auto scene_cornell_box(world &w, world &lights, camera &cam) -> void
     box1 = std::make_shared<translate>(box1, vec3{265, 0, 295});
     w.add(box1);
 
-    std::shared_ptr<raytraceable> box2 = box(vec3{0, 0, 0}, vec3{165, 165, 165}, white);
+    std::shared_ptr<raytraceable> box2 = box(vec3{0, 0, 0}, vec3{165, 165, 165}, aluminum);
     box2 = std::make_shared<rotate_y>(box2, angle::from_degrees(-18));
     box2 = std::make_shared<translate>(box2, vec3{130, 0, 65});
     w.add(box2);
@@ -148,7 +153,7 @@ auto scene_cornell_box(world &w, world &lights, camera &cam) -> void
 
     cam.aspect_ratio = 1.0;
     cam.image_width = 400;
-    cam.samples_per_pixel = 10;
+    cam.samples_per_pixel = 100;
     cam.max_depth = 50;
     cam.background = color{0, 0, 0};
     cam.vfov = angle::from_degrees(40);
@@ -205,5 +210,5 @@ auto main(int argc, char *argv[]) -> int
     camera cam{};
     scene_cornell_box(w, lights, cam);
     w.optimize();
-    cam.render(w, lights, args.output_path);
+    cam.render(w, lights, args.output_path, args.threads);
 }
